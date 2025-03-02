@@ -11,8 +11,8 @@ import genesis as gs
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-e", "--exp_name", type=str, default="drone-hovering")
-    parser.add_argument("--ckpt", type=int, default=500)
+    parser.add_argument("-e", "--exp_name", type=str, default="simple_roll-pitch")
+    parser.add_argument("--ckpt", type=int, default=800)
     parser.add_argument("--record", action="store_true", default=False)
     args = parser.parse_args()
 
@@ -58,6 +58,7 @@ def main():
             for _ in range(max_sim_step):
                 actions = policy(obs)
                 obs, _, rews, dones, infos = env.step(actions)
+                print(f"Altitide: {env.commands[:, 0].tolist()[0]:.1f} -> {env.base_pos[:, 2].tolist()[0]:.1f} | Roll: {env.commands[:, 1].tolist()[0]:.1f} -> {env.base_euler[:, 0].tolist()[0]:.1f} | Pitch: {env.commands[:, 2].tolist()[0]:.1f} -> {env.base_euler[:, 1].tolist()[0]:.1f}")
 
 
 if __name__ == "__main__":

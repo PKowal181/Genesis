@@ -5,6 +5,8 @@ import time
 import threading
 from pynput import keyboard
 
+from genesis.engine.entities.drone_entity import DroneEntity
+
 
 class DroneController:
     def __init__(self):
@@ -91,7 +93,7 @@ class DroneController:
         return self.rpms
 
 
-def update_camera(scene, drone):
+def update_camera(scene, drone: DroneEntity):
     """Updates the camera position to follow the drone"""
     if not scene.viewer:
         return
