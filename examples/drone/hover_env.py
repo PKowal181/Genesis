@@ -2,7 +2,12 @@ import torch
 import math
 import genesis as gs
 from genesis.engine.entities.drone_entity import DroneEntity
-from genesis.utils.geom import quat_to_xyz, transform_by_quat, inv_quat, transform_quat_by_quat
+from genesis.utils.geom import (
+    quat_to_xyz,
+    transform_by_quat,
+    inv_quat,
+    transform_quat_by_quat,
+)
 
 
 def gs_rand_float(lower, upper, shape, device):
@@ -10,7 +15,16 @@ def gs_rand_float(lower, upper, shape, device):
 
 
 class HoverEnv:
-    def __init__(self, num_envs, env_cfg, obs_cfg, reward_cfg, command_cfg, show_viewer=False, device="cuda"):
+    def __init__(
+        self,
+        num_envs,
+        env_cfg,
+        obs_cfg,
+        reward_cfg,
+        command_cfg,
+        show_viewer=False,
+        device="cuda",
+    ):
         self.device = torch.device(device)
 
         self.num_envs = num_envs
@@ -83,10 +97,16 @@ class HoverEnv:
             )
 
         # add drone
-        self.base_init_pos = torch.tensor(self.env_cfg["base_init_pos"], device=self.device)
-        self.base_init_quat = torch.tensor(self.env_cfg["base_init_quat"], device=self.device)
+        self.base_init_pos = torch.tensor(
+            self.env_cfg["base_init_pos"], device=self.device
+        )
+        self.base_init_quat = torch.tensor(
+            self.env_cfg["base_init_quat"], device=self.device
+        )
         self.inv_base_init_quat = inv_quat(self.base_init_quat)
-        self.drone: DroneEntity = self.scene.add_entity(gs.morphs.Drone(file="urdf/drones/cf2x.urdf"))
+        self.drone: DroneEntity = self.scene.add_entity(
+            gs.morphs.Drone(file="urdf/drones/cf2x.urdf")
+        )
 
         # build scene
         self.scene.build(n_envs=num_envs)
@@ -96,49 +116,87 @@ class HoverEnv:
         for name in self.reward_scales.keys():
             self.reward_scales[name] *= self.dt
             self.reward_functions[name] = getattr(self, "_reward_" + name)
-            self.episode_sums[name] = torch.zeros((self.num_envs,), device=self.device, dtype=gs.tc_float)
+            self.episode_sums[name] = torch.zeros(
+                (self.num_envs,), device=self.device, dtype=gs.tc_float
+            )
 
         # initialize buffers
-        self.obs_buf = torch.zeros((self.num_envs, self.num_obs), device=self.device, dtype=gs.tc_float)
-        self.rew_buf = torch.zeros((self.num_envs,), device=self.device, dtype=gs.tc_float)
-        self.reset_buf = torch.ones((self.num_envs,), device=self.device, dtype=gs.tc_int)
-        self.episode_length_buf = torch.zeros((self.num_envs,), device=self.device, dtype=gs.tc_int)
-        self.commands = torch.zeros((self.num_envs, self.num_commands), device=self.device, dtype=gs.tc_float)
+        self.obs_buf = torch.zeros(
+            (self.num_envs, self.num_obs), device=self.device, dtype=gs.tc_float
+        )
+        self.rew_buf = torch.zeros(
+            (self.num_envs,), device=self.device, dtype=gs.tc_float
+        )
+        self.reset_buf = torch.ones(
+            (self.num_envs,), device=self.device, dtype=gs.tc_int
+        )
+        self.episode_length_buf = torch.zeros(
+            (self.num_envs,), device=self.device, dtype=gs.tc_int
+        )
+        self.commands = torch.zeros(
+            (self.num_envs, self.num_commands), device=self.device, dtype=gs.tc_float
+        )
 
-        self.actions = torch.zeros((self.num_envs, self.num_actions), device=self.device, dtype=gs.tc_float)
+        self.actions = torch.zeros(
+            (self.num_envs, self.num_actions), device=self.device, dtype=gs.tc_float
+        )
         self.last_actions = torch.zeros_like(self.actions)
 
-        self.base_pos = torch.zeros((self.num_envs, 3), device=self.device, dtype=gs.tc_float)
-        self.base_quat = torch.zeros((self.num_envs, 4), device=self.device, dtype=gs.tc_float)
-        self.base_lin_vel = torch.zeros((self.num_envs, 3), device=self.device, dtype=gs.tc_float)
-        self.base_ang_vel = torch.zeros((self.num_envs, 3), device=self.device, dtype=gs.tc_float)
+        self.base_pos = torch.zeros(
+            (self.num_envs, 3), device=self.device, dtype=gs.tc_float
+        )
+        self.base_quat = torch.zeros(
+            (self.num_envs, 4), device=self.device, dtype=gs.tc_float
+        )
+        self.base_lin_vel = torch.zeros(
+            (self.num_envs, 3), device=self.device, dtype=gs.tc_float
+        )
+        self.base_ang_vel = torch.zeros(
+            (self.num_envs, 3), device=self.device, dtype=gs.tc_float
+        )
         self.last_base_pos = torch.zeros_like(self.base_pos)
 
         self.extras = dict()  # extra information for logging
 
     def _resample_commands(self, envs_idx):
-        self.commands[envs_idx, 0] = gs_rand_float(*self.command_cfg["altitude_range"], (len(envs_idx),), self.device)
-        self.commands[envs_idx, 1] = gs_rand_float(*self.command_cfg["roll_range"], (len(envs_idx),), self.device)
-        self.commands[envs_idx, 2] = gs_rand_float(*self.command_cfg["pitch_range"], (len(envs_idx),), self.device)
-        self.commands[envs_idx, 3] = gs_rand_float(*self.command_cfg["yaw_range"], (len(envs_idx),), self.device)
-        # if self.target is not None:
-            # self.target.set_pos(self.commands[envs_idx], zero_velocity=True, envs_idx=envs_idx)
+        choices = torch.randint(0, 3, (len(envs_idx),), device=self.device)
 
-    # def _at_target(self):
-    #     at_target = (
-    #         (torch.norm(self.rel_pos, dim=1) < self.env_cfg["at_target_threshold"]).nonzero(as_tuple=False).flatten()
-    #     )
-    #     return at_target
+        self.commands[envs_idx, 0] = torch.where(
+            choices == 0,
+            gs_rand_float(
+                *self.command_cfg["roll_range"], (len(envs_idx),), self.device
+            ),
+            torch.zeros((len(envs_idx),), device=self.device),
+        )
+
+        self.commands[envs_idx, 1] = torch.where(
+            choices == 1,
+            gs_rand_float(
+                *self.command_cfg["pitch_range"], (len(envs_idx),), self.device
+            ),
+            torch.zeros((len(envs_idx),), device=self.device),
+        )
+
+        self.commands[envs_idx, 2] = torch.where(
+            choices == 2,
+            gs_rand_float(
+                *self.command_cfg["yaw_rate_range"], (len(envs_idx),), self.device
+            ),
+            torch.zeros((len(envs_idx),), device=self.device),
+        )
 
     def step(self, actions):
-        self.actions = torch.clip(actions, -self.env_cfg["clip_actions"], self.env_cfg["clip_actions"])
+        self.actions = torch.clip(
+            actions, -self.env_cfg["clip_actions"], self.env_cfg["clip_actions"]
+        )
         exec_actions = self.actions.cpu()
         # exec_actions = self.last_actions.cpu() if self.simulate_action_latency else self.actions.cpu()
         # target_dof_pos = exec_actions * self.env_cfg["action_scale"] + self.default_dof_pos
         # self.drone.control_dofs_position(target_dof_pos)
 
         # 14468 is hover rpm
-        self.drone.set_propellels_rpm((1 + exec_actions * 0.8) * 14468.429183500699)
+        motor_speeds = (1 + exec_actions * 0.8) * 14468.429183500699
+        self.drone.set_propellels_rpm(motor_speeds)
         self.scene.step()
 
         # update buffers
@@ -149,7 +207,10 @@ class HoverEnv:
         # self.last_rel_pos = self.commands - self.last_base_pos
         self.base_quat[:] = self.drone.get_quat()
         self.base_euler = quat_to_xyz(
-            transform_quat_by_quat(torch.ones_like(self.base_quat) * self.inv_base_init_quat, self.base_quat)
+            transform_quat_by_quat(
+                torch.ones_like(self.base_quat) * self.inv_base_init_quat,
+                self.base_quat,
+            )
         )
         inv_base_quat = inv_quat(self.base_quat)
         self.base_lin_vel[:] = transform_by_quat(self.drone.get_vel(), inv_base_quat)
@@ -161,17 +222,33 @@ class HoverEnv:
 
         # check termination and reset
         self.crash_condition = (
-            (torch.abs(self.base_euler[:, 0]) > self.env_cfg["termination_if_roll_greater_than"])
-            | (torch.abs(self.base_euler[:, 1]) > self.env_cfg["termination_if_pitch_greater_than"])
-            # | (torch.abs(self.rel_pos[:, 0]) > self.env_cfg["termination_if_x_greater_than"])
-            # | (torch.abs(self.rel_pos[:, 1]) > self.env_cfg["termination_if_y_greater_than"])
+            (
+                torch.abs(self.base_euler[:, 0])
+                > self.env_cfg["termination_if_roll_greater_than"]
+            )
+            | (
+                torch.abs(self.base_euler[:, 1])
+                > self.env_cfg["termination_if_pitch_greater_than"]
+            )
+            | (
+                torch.abs(self.base_ang_vel[:, 2])
+                > self.env_cfg["termination_if_yaw_rate_greater_than"]
+            )
             | (self.base_pos[:, 2] > self.env_cfg["termination_if_z_greater_than"])
             | (self.base_pos[:, 2] < self.env_cfg["termination_if_close_to_ground"])
         )
-        self.reset_buf = (self.episode_length_buf > self.max_episode_length) | self.crash_condition
+        self.reset_buf = (
+            self.episode_length_buf > self.max_episode_length
+        ) | self.crash_condition
 
-        time_out_idx = (self.episode_length_buf > self.max_episode_length).nonzero(as_tuple=False).flatten()
-        self.extras["time_outs"] = torch.zeros_like(self.reset_buf, device=self.device, dtype=gs.tc_float)
+        time_out_idx = (
+            (self.episode_length_buf > self.max_episode_length)
+            .nonzero(as_tuple=False)
+            .flatten()
+        )
+        self.extras["time_outs"] = torch.zeros_like(
+            self.reset_buf, device=self.device, dtype=gs.tc_float
+        )
         self.extras["time_outs"][time_out_idx] = 1.0
 
         self.reset_idx(self.reset_buf.nonzero(as_tuple=False).flatten())
@@ -186,11 +263,27 @@ class HoverEnv:
         # compute observations
         self.obs_buf = torch.cat(
             [
-                torch.clip((self.base_euler[:, 0:] - self.commands[:, 1:]) * self.obs_scales["rel_angle"], -1, 1),
-                torch.clip(self.base_pos[:, 2:] * self.obs_scales["rel_pos"], -1, 1),
+                torch.clip(
+                    (self.base_euler[:, 0:1] - self.commands[:, 0:1])
+                    * self.obs_scales["rel_angle"],
+                    -1,
+                    1,
+                ),  # relative angle (roll)
+                torch.clip(
+                    (self.base_euler[:, 1:2] - self.commands[:, 1:2])
+                    * self.obs_scales["rel_angle"],
+                    -1,
+                    1,
+                ),  # relative angle (pitch)
+                torch.clip(
+                    (self.base_ang_vel[:, 2:] - self.commands[:, 2:])
+                    * self.obs_scales["ang_vel"],
+                    -1,
+                    1,
+                ),  # relative angle rate (yaw)
                 self.base_quat,
-                torch.clip(self.base_lin_vel * self.obs_scales["lin_vel"], -1, 1),
                 torch.clip(self.base_ang_vel * self.obs_scales["ang_vel"], -1, 1),
+                # torch.clip((actions - self.last_actions)/2.0, -1, 1),
                 self.last_actions,
             ],
             axis=-1,
@@ -216,8 +309,12 @@ class HoverEnv:
         # self.rel_pos = self.commands - self.base_pos
         # self.last_rel_pos = self.commands - self.last_base_pos
         self.base_quat[envs_idx] = self.base_init_quat.reshape(1, -1)
-        self.drone.set_pos(self.base_pos[envs_idx], zero_velocity=True, envs_idx=envs_idx)
-        self.drone.set_quat(self.base_quat[envs_idx], zero_velocity=True, envs_idx=envs_idx)
+        self.drone.set_pos(
+            self.base_pos[envs_idx], zero_velocity=True, envs_idx=envs_idx
+        )
+        self.drone.set_quat(
+            self.base_quat[envs_idx], zero_velocity=True, envs_idx=envs_idx
+        )
         self.base_lin_vel[envs_idx] = 0
         self.base_ang_vel[envs_idx] = 0
         self.drone.zero_all_dofs_velocity(envs_idx)
@@ -231,10 +328,11 @@ class HoverEnv:
         self.extras["episode"] = {}
         for key in self.episode_sums.keys():
             self.extras["episode"]["rew_" + key] = (
-                torch.mean(self.episode_sums[key][envs_idx]).item() / self.env_cfg["episode_length_s"]
+                torch.mean(self.episode_sums[key][envs_idx]).item()
+                / self.env_cfg["episode_length_s"]
             )
             self.episode_sums[key][envs_idx] = 0.0
-
+        # print("Crash")
         self._resample_commands(envs_idx)
 
     def reset(self):
@@ -247,33 +345,51 @@ class HoverEnv:
     #     target_rew = torch.sum(torch.square(self.last_rel_pos), dim=1) - torch.sum(torch.square(self.rel_pos), dim=1)
     #     return target_rew
 
-    def _reward_altitude(self):
-        diff = torch.abs(self.base_pos[:, 2] - self.commands[:, 0])
-        diff[diff < 0.1] = 0.1
-        altitude_rew = 1/diff
-        return altitude_rew
+    # def _reward_altitude(self):
+    #     diff = torch.abs(self.base_pos[:, 2] - self.commands[:, 0]).square()
+    #     diff[diff < 0.1] = 0.1
+    #     altitude_rew = 1 / diff
+    #     return altitude_rew
+
+    # def _reward_around_hover(self):
+    #     return torch.abs(torch.norm(self.motor_speeds - 14468))
 
     def _reward_roll(self):
-        diff = torch.abs(self.base_euler[:, 0] - self.commands[:, 1]).square()
-        diff[diff < 0.01] = 0.01
-        roll_rew = 1/diff
-        return roll_rew
+        # diff = torch.abs(self.base_euler[:, 0] - self.commands[:, 0]).square()
+        # diff[diff < 0.01] = 0.01
+        # roll_rew = 1 / diff
+        # return roll_rew
+        error = (self.base_euler[:, 0] - self.commands[:, 0]).square()
+        return error
 
     def _reward_pitch(self):
-        diff = torch.abs(self.base_euler[:, 1] - self.commands[:, 2]).square()
-        diff[diff < 0.01] = 0.01
-        pitch_rew = 1/diff
-        return pitch_rew
+        # diff = torch.abs(self.base_euler[:, 1] - self.commands[:, 1]).square()
+        # diff[diff < 0.01] = 0.01
+        # pitch_rew = 1 / diff
+        # return pitch_rew
+        error = (self.base_euler[:, 1] - self.commands[:, 1]).square()
+        return error
+
+    def _reward_yaw_rate(self):
+        # diff = torch.abs(self.base_ang_vel[:, 2] - self.commands[:, 2]).square()
+        # diff[diff < 0.01] = 0.01
+        # yaw_rew_rate = 1 / diff
+        # return yaw_rew_rate
+        error = (self.base_ang_vel[:, 2] - self.commands[:, 2]).square()
+        return error
+
+    def _reward_duration(self):
+        return self.episode_length_buf
+
+    # def _reward_yaw(self):
+    #     diff = torch.abs(self.base_euler[:, 2] - self.commands[:, 3]).square()
+    #     diff[diff < 0.01] = 0.01
+    #     yaw_rew = 1/diff
+    #     return yaw_rew
 
     def _reward_smooth(self):
-        smooth_rew = torch.sum(torch.square(self.actions - self.last_actions), dim=1)
+        smooth_rew = torch.norm(torch.square(self.actions - self.last_actions), dim=1)
         return smooth_rew
-
-    def _reward_yaw(self):
-        diff = torch.abs(self.base_euler[:, 2] - self.commands[:, 3]).square()
-        diff[diff < 0.01] = 0.01
-        yaw_rew = 1/diff
-        return yaw_rew
 
     def _reward_angular(self):
         angular_rew = torch.norm(self.base_ang_vel / 3.14159, dim=1)
